@@ -1,0 +1,430 @@
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// In-Memory Enterprise Database Store
+let db = {
+    intakeLots: [
+        { id: 'LOT-401', supplier: 'GreenValley Orchards, Trichy', variety: 'Alphonso Mango', brix: 14.5, ph: 3.8, qty: 2500, status: 'APPROVED', date: '2026-06-12' },
+        { id: 'LOT-402', supplier: 'Kaveri Delta Farms', variety: 'Kesar Mango', brix: 13.2, ph: 4.1, qty: 1800, status: 'APPROVED', date: '2026-06-13' },
+        { id: 'LOT-403', supplier: 'Delta Agro Corp', variety: 'Totapuri Mango', brix: 11.0, ph: 3.5, qty: 3000, status: 'FLAGGED / HOLD', date: '2026-06-14' }
+    ],
+    batches: [
+        { id: 'BATCH-101', product: 'Alphonso Mango Nectar 1L', lotId: 'LOT-401', volume: 5000, inputBrix: 14.5, status: 'IN PRODUCTION', date: '2026-06-14', qrHash: 'HASH-ALPH-101', expiry: '2026-12-14', temp: '4.2°C' },
+        { id: 'BATCH-102', product: 'Tropical Fruit Blend 500ml', lotId: 'LOT-402', volume: 3200, inputBrix: 13.2, status: 'READY FOR DISPATCH', date: '2026-06-10', qrHash: 'HASH-TROP-102', expiry: '2026-07-01', temp: '3.8°C' }
+    ]
+};
+
+// GET initial database state
+app.get('/api/state', (req, res) => {
+    res.json(db);
+});
+
+// POST Raw Fruit Intake & Automated QC Gatekeeper
+app.post('/api/intake', (req, res) => {
+    const { supplier, variety, brix, ph, qty } = req.body;
+    let status = 'APPROVED';
+    if (parseFloat(brix) < 12.0 || parseFloat(ph) > 4.5) {
+        status = 'FLAGGED / HOLD';
+    }
+
+    const newLot = {
+        id: 'LOT-' + Math.floor(100 + Math.random() * 900),
+        supplier, variety, brix: parseFloat(brix), ph: parseFloat(ph), qty: parseInt(qty), status,
+        date: new Date().toISOString().split('T')[0]
+    };
+
+    db.intakeLots.unshift(newLot);
+    res.json({ success: true, lot: newLot, lots: db.intakeLots });
+});
+
+// POST Dynamic Formulation & Batch Commitment
+app.post('/api/batches', (req, res) => {
+    const { lotId, product, volume } = req.body;
+    const lot = db.intakeLots.find(l => l.id === lotId);
+    if (!lot) return res.status(404).json({ error: 'Lot not found' });
+
+    const newBatchId = 'BATCH-' + Math.floor(100 + Math.random() * 900);
+    const qrHash = 'HASH-' + Math.random().toString(36).substring(7).toUpperCase();
+
+    const newBatch = {
+        id: newBatchId,
+        product,
+        lotId,
+        volume: parseFloat(volume),
+        inputBrix: lot.brix,
+        status: 'IN PRODUCTION',
+        date: new Date().toISOString().split('T')[0],
+        qrHash,
+        expiry: '2026-12-31',
+        temp: '4.0°C'
+    };
+
+    db.batches.unshift(newBatch);
+    res.json({ success: true, batch: newBatch, batches: db.batches });
+});
+
+// POST Recall Kill-Switch Execution
+app.post('/api/recall', (req, res) => {
+    const { batchId, reason } = req.body;
+    const batch = db.batches.find(b => b.id === batchId);
+    if (batch) {
+        batch.status = 'RECALLED';
+        const lot = db.intakeLots.find(l => l.id === batch.lotId);
+        if (lot) lot.status = 'RECALLED / QUARANTINE';
+    }
+    res.json({ success: true, batches: db.batches, lots: db.intakeLots, reason });
+});
+
+// GET Consumer QR Provenance Verification
+app.get('/api/verify/:hash', (req, res) => {
+    const hash = req.params.hash;
+    const batch = db.batches.find(b => b.qrHash === hash || b.id === hash);
+    if (!batch) return res.status(404).json({ error: 'Product batch or QR hash not found' });
+
+    const lot = db.intakeLots.find(l => l.id === batch.lotId);
+    res.json({ batch, lot });
+});
+
+app.listen(PORT, () => {
+    console.log(`HYDRAMINDS ERP Server running on http://localhost:${PORT}`);
+});
+2. Frontend HTML (public/index.html)
+Create a subfolder named public and save this file inside as index.html.
+
+HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HYDRAMINDS | Cloud-Based Food Manufacturing ERP & Traceability Platform</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- QRCode Generator Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Custom Stylesheet -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans antialiased min-h-screen flex flex-col">
+
+    <!-- Top Navigation Bar -->
+    <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="bg-emerald-600 p-2 rounded-lg text-white font-bold flex items-center justify-center">
+                    <i class="fa-solid fa-leaf"></i>
+                </div>
+                <div>
+                    <span class="text-lg font-black tracking-tight text-white">HYDRAMINDS</span>
+                    <span class="text-xs bg-emerald-500/10 text-emerald-400 font-semibold px-2 py-0.5 rounded ml-2 border border-emerald-500/20">Bio-ERP v2.4</span>
+                </div>
+            </div>
+            <div class="flex items-center space-x-4">
+                <div class="hidden md:flex flex-col text-right">
+                    <span class="text-xs text-slate-400">Active Plant Facility</span>
+                    <span class="text-sm font-semibold text-emerald-400"><i class="fa-solid fa-location-dot mr-1"></i> Trichy Processing Unit #04</span>
+                </div>
+                <button onclick="switchTab('consumer')" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-lg shadow-emerald-900/30 flex items-center gap-2">
+                    <i class="fa-solid fa-qrcode"></i> Public QR Inspector
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Dashboard Container -->
+    <div class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 flex flex-col gap-6">
+
+        <!-- Navigation Tabs -->
+        <div class="flex border-b border-slate-800 overflow-x-auto">
+            <button onclick="switchTab('dashboard')" id="tab-btn-dashboard" class="tab-btn px-6 py-3 border-b-2 border-emerald-500 text-emerald-400 font-medium text-sm flex items-center gap-2 whitespace-nowrap">
+                <i class="fa-solid fa-chart-line"></i> Factory Overview & KPIs
+            </button>
+            <button onclick="switchTab('intake')" id="tab-btn-intake" class="tab-btn px-6 py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center gap-2 whitespace-nowrap">
+                <i class="fa-solid fa-truck-ramp-box"></i> 1. Raw Fruit Intake & QC
+            </button>
+            <button onclick="switchTab('formulation')" id="tab-btn-formulation" class="tab-btn px-6 py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center gap-2 whitespace-nowrap">
+                <i class="fa-solid fa-flask"></i> 2. Dynamic Batch Formulator
+            </button>
+            <button onclick="switchTab('inventory')" id="tab-btn-inventory" class="tab-btn px-6 py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center gap-2 whitespace-nowrap">
+                <i class="fa-solid fa-boxes-stacked"></i> 3. Smart FEFO Inventory
+            </button>
+            <button onclick="switchTab('recall')" id="tab-btn-recall" class="tab-btn px-6 py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center gap-2 whitespace-nowrap">
+                <i class="fa-solid fa-triangle-exclamation text-rose-400"></i> 4. Recall Kill-Switch
+            </button>
+            <button onclick="switchTab('consumer')" id="tab-btn-consumer" class="tab-btn px-6 py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center gap-2 whitespace-nowrap">
+                <i class="fa-solid fa-mobile-screen"></i> 5. Consumer Provenance Portal
+            </button>
+        </div>
+
+        <!-- TAB 1: DASHBOARD & METRICS -->
+        <div id="tab-dashboard" class="tab-content flex flex-col gap-6">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-5 flex flex-col justify-between">
+                    <div class="flex items-center justify-between text-slate-400 text-sm">
+                        <span>Spoilage Reduction</span>
+                        <span class="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded text-xs font-bold">+60% Target</span>
+                    </div>
+                    <div class="mt-4"><h3 class="text-3xl font-black text-white">58.4%</h3><p class="text-xs text-slate-400 mt-1">Saved via automated FEFO sorting</p></div>
+                </div>
+                <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-5 flex flex-col justify-between">
+                    <div class="flex items-center justify-between text-slate-400 text-sm">
+                        <span>Recall Audit Speed</span>
+                        <span class="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded text-xs font-bold">&lt;60 Sec</span>
+                    </div>
+                    <div class="mt-4"><h3 class="text-3xl font-black text-white">12.8s</h3><p class="text-xs text-slate-400 mt-1">Graph traversal isolation time</p></div>
+                </div>
+                <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-5 flex flex-col justify-between">
+                    <div class="flex items-center justify-between text-slate-400 text-sm">
+                        <span>Production Yield Gain</span>
+                        <span class="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded text-xs font-bold">Dynamic</span>
+                    </div>
+                    <div class="mt-4"><h3 class="text-3xl font-black text-white">+18.2%</h3><p class="text-xs text-slate-400 mt-1">Brix-adjusted juice formulation</p></div>
+                </div>
+                <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-5 flex flex-col justify-between">
+                    <div class="flex items-center justify-between text-slate-400 text-sm">
+                        <span>Traceability Visibility</span>
+                        <span class="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded text-xs font-bold">100% Chain</span>
+                    </div>
+                    <div class="mt-4"><h3 class="text-3xl font-black text-white">Full Digital</h3><p class="text-xs text-slate-400 mt-1">Orchard to retail shelf QR links</p></div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="lg:col-span-2 bg-slate-800/40 border border-slate-700/60 rounded-xl p-5">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-bold text-lg text-white flex items-center gap-2"><i class="fa-solid fa-industry text-emerald-400"></i> Active Production Batches</h3>
+                        <button onclick="switchTab('formulation')" class="text-xs bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 px-3 py-1.5 rounded font-medium transition">Run New Batch</button>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm text-slate-300">
+                            <thead class="bg-slate-800 text-xs uppercase text-slate-400">
+                                <tr><th class="p-3 rounded-l-lg">Batch ID</th><th class="p-3">Product</th><th class="p-3">Input Brix / pH</th><th class="p-3">Status</th><th class="p-3 rounded-r-lg">Action</th></tr>
+                            </thead>
+                            <tbody id="dashboard-batch-table" class="divide-y divide-slate-800"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800/40 border border-slate-700/60 rounded-xl p-5 flex flex-col justify-between">
+                    <div>
+                        <h3 class="font-bold text-lg text-white mb-4 flex items-center gap-2"><i class="fa-solid fa-shield-halved text-emerald-400"></i> Regulatory Alignment</h3>
+                        <div class="space-y-3">
+                            <div class="bg-slate-800 p-3 rounded-lg border border-slate-700/50 flex items-center justify-between">
+                                <div><p class="text-sm font-bold text-white">FSSAI Pulp Processing</p><p class="text-xs text-slate-400">Hygiene & safety checks</p></div>
+                                <span class="bg-emerald-500/20 text-emerald-400 text-xs px-2.5 py-1 rounded-full font-bold">Verified</span>
+                            </div>
+                            <div class="bg-slate-800 p-3 rounded-lg border border-slate-700/50 flex items-center justify-between">
+                                <div><p class="text-sm font-bold text-white">US FDA FSMA Rule 204</p><p class="text-xs text-slate-400">Critical Tracking Events</p></div>
+                                <span class="bg-emerald-500/20 text-emerald-400 text-xs px-2.5 py-1 rounded-full font-bold">Active</span>
+                            </div>
+                            <div class="bg-slate-800 p-3 rounded-lg border border-slate-700/50 flex items-center justify-between">
+                                <div><p class="text-sm font-bold text-white">Codex HACCP</p><p class="text-xs text-slate-400">Cold chain & CCP logging</p></div>
+                                <span class="bg-emerald-500/20 text-emerald-400 text-xs px-2.5 py-1 rounded-full font-bold">Enforced</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: RAW FRUIT INTAKE -->
+        <div id="tab-intake" class="tab-content hidden flex flex-col gap-6">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="bg-slate-800/40 border border-slate-700/60 rounded-xl p-6">
+                    <h3 class="text-lg font-bold text-white mb-4 flex items-center gap-2"><i class="fa-solid fa-truck-ramp-box text-emerald-400"></i> New Orchard Lot Intake</h3>
+                    <form id="intake-form" onsubmit="handleIntakeSubmit(event)" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Supplier / Farm Name</label>
+                            <input type="text" id="intake-supplier" required value="GreenValley Orchards (Lot #402)" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Fruit Variety</label>
+                            <select id="intake-variety" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+                                <option value="Alphonso Mango">Alphonso Mango</option>
+                                <option value="Kesar Mango">Kesar Mango</option>
+                                <option value="Totapuri Mango">Totapuri Mango</option>
+                            </select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Sweetness (°Brix)</label>
+                                <input type="number" step="0.1" id="intake-brix" required value="14.5" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Acidity (pH)</label>
+                                <input type="number" step="0.1" id="intake-ph" required value="3.8" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Quantity (Kg)</label>
+                            <input type="number" id="intake-qty" required value="2500" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+                        </div>
+                        <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-lg text-sm transition shadow-lg shadow-emerald-900/30">
+                            Run Automated QC Inspection
+                        </button>
+                    </form>
+                </div>
+
+                <div class="lg:col-span-2 flex flex-col gap-6">
+                    <div id="qc-result-banner" class="hidden p-4 rounded-xl border flex items-start gap-4">
+                        <div id="qc-icon" class="text-2xl mt-0.5"></div>
+                        <div><h4 id="qc-title" class="font-bold text-base"></h4><p id="qc-desc" class="text-sm mt-1 text-slate-300"></p></div>
+                    </div>
+                    <div class="bg-slate-800/40 border border-slate-700/60 rounded-xl p-5 flex-1">
+                        <h3 class="text-lg font-bold text-white mb-4 flex items-center gap-2"><i class="fa-solid fa-list text-emerald-400"></i> Verified Intake Ledger</h3>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left text-sm text-slate-300">
+                                <thead class="bg-slate-800 text-xs uppercase text-slate-400">
+                                    <tr><th class="p-3 rounded-l-lg">Lot ID</th><th class="p-3">Supplier</th><th class="p-3">Variety</th><th class="p-3">°Brix / pH</th><th class="p-3">QC Status</th></tr>
+                                </thead>
+                                <tbody id="intake-table-body" class="divide-y divide-slate-800"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: DYNAMIC FORMULATOR -->
+        <div id="tab-formulation" class="tab-content hidden flex flex-col gap-6">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="bg-slate-800/40 border border-slate-700/60 rounded-xl p-6">
+                    <h3 class="text-lg font-bold text-white mb-4 flex items-center gap-2"><i class="fa-solid fa-flask text-emerald-400"></i> Dynamic Recipe Engine</h3>
+                    <form onsubmit="handleFormulationRun(event)" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Select Approved Fruit Lot</label>
+                            <select id="form-lot-select" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Target Product Line</label>
+                            <select id="form-product" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+                                <option value="Alphonso Mango Nectar 1L">Alphonso Mango Nectar (Standard 16° Brix)</option>
+                                <option value="Tropical Fruit Blend 500ml">Tropical Fruit Blend (Standard 15° Brix)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Target Volume (Liters)</label>
+                            <input type="number" id="form-volume" value="5000" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+                        </div>
+                        <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-lg text-sm transition shadow-lg shadow-emerald-900/30">
+                            Calculate & Balance Batch
+                        </button>
+                    </form>
+                </div>
+                <div class="lg:col-span-2 bg-slate-800/40 border border-slate-700/60 rounded-xl p-6 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-6">
+                            <h3 class="text-lg font-bold text-white flex items-center gap-2"><i class="fa-solid fa-scale-balanced text-emerald-400"></i> Bill of Materials (BOM)</h3>
+                            <span id="form-status-badge" class="bg-slate-700 text-slate-300 text-xs px-3 py-1 rounded-full font-bold">Awaiting Execution</span>
+                        </div>
+                        <div id="form-results-panel" class="space-y-4 text-slate-300">
+                            <div class="text-center py-12 text-slate-500"><i class="fa-solid fa-calculator text-4xl mb-3"></i><p>Select an approved lot and run the formulator.</p></div>
+                        </div>
+                    </div>
+                    <div id="commit-batch-container" class="hidden mt-6 pt-4 border-t border-slate-700">
+                        <button onclick="commitBatchToProduction()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3 rounded-lg text-sm transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30">
+                            <i class="fa-solid fa-check-to-slot"></i> Commit Batch & Generate QR
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 4: SMART FEFO INVENTORY -->
+        <div id="tab-inventory" class="tab-content hidden flex flex-col gap-6">
+            <div class="bg-slate-800/40 border border-slate-700/60 rounded-xl p-6">
+                <h3 class="text-lg font-bold text-white mb-4 flex items-center gap-2"><i class="fa-solid fa-boxes-stacked text-emerald-400"></i> Smart FEFO Warehouse</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm text-slate-300">
+                        <thead class="bg-slate-800 text-xs uppercase text-slate-400">
+                            <tr><th class="p-3 rounded-l-lg">Batch SKU</th><th class="p-3">Product Name</th><th class="p-3">Production Date</th><th class="p-3">Expiry Date</th><th class="p-3">Storage Temp</th><th class="p-3">Priority</th><th class="p-3 rounded-r-lg">Action</th></tr>
+                        </thead>
+                        <tbody id="fefo-table-body" class="divide-y divide-slate-800"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 5: RECALL KILL-SWITCH -->
+        <div id="tab-recall" class="tab-content hidden flex flex-col gap-6">
+            <div class="bg-rose-950/20 border border-rose-500/30 rounded-xl p-6">
+                <h3 class="text-lg font-bold text-rose-400 flex items-center gap-2"><i class="fa-solid fa-triangle-exclamation"></i> Bi-Directional Recall Kill-Switch Simulator</h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+                    <div class="bg-slate-800/80 border border-slate-700 p-4 rounded-xl">
+                        <label class="block text-xs uppercase text-slate-400 font-semibold mb-1">Select Target Batch</label>
+                        <select id="recall-batch-select" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-rose-500"></select>
+                    </div>
+                    <div class="bg-slate-800/80 border border-slate-700 p-4 rounded-xl">
+                        <label class="block text-xs uppercase text-slate-400 font-semibold mb-1">Contamination Reason</label>
+                        <select id="recall-reason" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-rose-500">
+                            <option value="Pathogen Detected (E. Coli)">Pathogen Detected (E. Coli)</option>
+                            <option value="Cold Chain Temperature Breach">Cold Chain Temperature Breach (>8°C)</option>
+                        </select>
+                    </div>
+                    <div class="bg-slate-800/80 border border-slate-700 p-4 rounded-xl flex flex-col justify-end">
+                        <button onclick="triggerRecallKillSwitch()" class="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 rounded-lg text-sm transition shadow-lg shadow-rose-950/50 flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-skull-crossbones"></i> EXECUTE RECALL KILL-SWITCH
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div id="recall-output-container" class="hidden bg-slate-800/40 border border-slate-700/60 rounded-xl p-6">
+                <h3 class="font-bold text-lg text-white mb-4 flex items-center gap-2"><i class="fa-solid fa-network-wired text-rose-400"></i> Isolation Graph & Impact Tree</h3>
+                <div id="recall-tree-content" class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4"></div>
+            </div>
+        </div>
+
+        <!-- TAB 6: CONSUMER PORTAL -->
+        <div id="tab-consumer" class="tab-content hidden flex flex-col gap-6 max-w-4xl mx-auto w-full">
+            <div class="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 sm:p-8 shadow-2xl">
+                <div class="text-center max-w-lg mx-auto mb-8">
+                    <div id="consumer-status-banner-icon" class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-500/10 text-emerald-400 text-3xl mb-4 border border-emerald-500/20"><i class="fa-solid fa-shield-check"></i></div>
+                    <h2 class="text-2xl font-black text-white">Consumer Product Provenance</h2>
+                    <p class="text-sm text-slate-400 mt-2">Verify orchard origin and safety status via serialized QR hash.</p>
+                </div>
+                <div class="flex gap-2 max-w-md mx-auto mb-8">
+                    <input type="text" id="qr-input-hash" placeholder="Enter QR Hash (e.g. HASH-ALPH-101)" class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500">
+                    <button onclick="lookupConsumerQR()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded-xl font-medium text-sm transition">Verify QR</button>
+                </div>
+                <div id="consumer-result-card" class="hidden space-y-6">
+                    <div id="consumer-alert-box" class="p-4 rounded-xl border flex items-center gap-3">
+                        <i id="consumer-alert-icon" class="fa-solid text-xl"></i>
+                        <div><h4 id="consumer-alert-title" class="font-bold text-base"></h4><p id="consumer-alert-desc" class="text-xs mt-0.5"></p></div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-900/60 p-6 rounded-xl border border-slate-800">
+                        <div>
+                            <span class="text-xs uppercase font-semibold text-slate-500">Product Details</span>
+                            <h3 id="res-product-name" class="text-lg font-bold text-white mt-1"></h3>
+                            <p id="res-batch-id" class="text-xs text-emerald-400 font-mono mt-0.5"></p>
+                            <div class="mt-6 space-y-3 text-sm text-slate-300">
+                                <div class="flex justify-between border-b border-slate-800 pb-2"><span class="text-slate-400">Harvest Date:</span><span id="res-harvest-date" class="font-medium text-white"></span></div>
+                                <div class="flex justify-between border-b border-slate-800 pb-2"><span class="text-slate-400">Orchard Source:</span><span id="res-supplier" class="font-medium text-white"></span></div>
+                                <div class="flex justify-between border-b border-slate-800 pb-2"><span class="text-slate-400">Initial Quality:</span><span id="res-qc-metrics" class="font-medium text-white"></span></div>
+                            </div>
+                        </div>
+                        <div class="flex flex-col items-center justify-center bg-slate-900 p-6 rounded-xl border border-slate-800">
+                            <span class="text-xs uppercase font-semibold text-slate-400 mb-3">Serialized QR Code</span>
+                            <div id="qrcode" class="bg-white p-3 rounded-lg shadow"></div>
+                            <span id="res-hash-label" class="text-xs font-mono text-slate-400 mt-3"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Frontend Script -->
+    <script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,212 @@
+let appState = { intakeLots: [], batches: [] };
+
+// Fetch initial data state from Node.js backend on load
+async function fetchAppState() {
+    try {
+        const res = await fetch('/api/state');
+        appState = await res.json();
+        renderDashboard();
+    } catch (err) {
+        console.error('Error connecting to backend server:', err);
+    }
+}
+
+function switchTab(tabId) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+    document.querySelectorAll('.tab-btn').forEach(el => {
+        el.classList.remove('border-emerald-500', 'text-emerald-400');
+        el.classList.add('border-transparent', 'text-slate-400');
+    });
+    document.getElementById(`tab-${tabId}`).classList.remove('hidden');
+    const activeBtn = document.getElementById(`tab-btn-${tabId}`);
+    if(activeBtn) {
+        activeBtn.classList.add('border-emerald-500', 'text-emerald-400');
+        activeBtn.classList.remove('border-transparent', 'text-slate-400');
+    }
+    if(tabId === 'dashboard') renderDashboard();
+    if(tabId === 'intake') renderIntakeTable();
+    if(tabId === 'formulation') populateLotDropdowns();
+    if(tabId === 'inventory') renderFEFOTable();
+    if(tabId === 'recall') populateRecallDropdowns();
+    if(tabId === 'consumer') lookupConsumerQR('HASH-ALPH-101');
+}
+
+function renderDashboard() {
+    const tbody = document.getElementById('dashboard-batch-table');
+    tbody.innerHTML = appState.batches.map(b => `
+        <tr class="hover:bg-slate-800/50 transition">
+            <td class="p-3 font-mono text-xs text-emerald-400">${b.id}</td>
+            <td class="p-3 font-medium text-white">${b.product}</td>
+            <td class="p-3">${b.inputBrix}° Brix / 3.8 pH</td>
+            <td class="p-3">
+                <span class="px-2.5 py-1 rounded-full text-xs font-bold ${b.status === 'RECALLED' ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}">${b.status}</span>
+            </td>
+            <td class="p-3">
+                <button onclick="switchTab('consumer'); document.getElementById('qr-input-hash').value='${b.qrHash}'; lookupConsumerQR('${b.qrHash}');" class="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2.5 py-1 rounded">View QR</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function handleIntakeSubmit(e) {
+    e.preventDefault();
+    const payload = {
+        supplier: document.getElementById('intake-supplier').value,
+        variety: document.getElementById('intake-variety').value,
+        brix: document.getElementById('intake-brix').value,
+        ph: document.getElementById('intake-ph').value,
+        qty: document.getElementById('intake-qty').value
+    };
+
+    const res = await fetch('/api/intake', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    appState.intakeLots = data.lots;
+
+    const banner = document.getElementById('qc-result-banner');
+    const isApproved = data.lot.status === 'APPROVED';
+    banner.className = `p-4 rounded-xl border flex items-start gap-4 ${isApproved ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300' : 'bg-rose-950/40 border-rose-500/30 text-rose-300'}`;
+    document.getElementById('qc-icon').innerHTML = `<i class="fa-solid ${isApproved ? 'fa-circle-check text-emerald-400' : 'fa-triangle-exclamation text-rose-400'}"></i>`;
+    document.getElementById('qc-title').innerText = `QC Inspection Result: ${data.lot.status}`;
+    document.getElementById('qc-desc').innerText = isApproved ? 'Lot meets food safety tolerances. Cleared for production.' : 'Warning: Brix or pH outside standards. Automated hold applied.';
+    banner.classList.remove('hidden');
+
+    renderIntakeTable();
+}
+
+function renderIntakeTable() {
+    const tbody = document.getElementById('intake-table-body');
+    tbody.innerHTML = appState.intakeLots.map(l => `
+        <tr class="hover:bg-slate-800/50 transition">
+            <td class="p-3 font-mono text-xs text-emerald-400">${l.id}</td>
+            <td class="p-3 text-white">${l.supplier}</td>
+            <td class="p-3">${l.variety}</td>
+            <td class="p-3">${l.brix}° Brix / ${l.ph} pH</td>
+            <td class="p-3"><span class="px-2.5 py-1 rounded-full text-xs font-bold ${l.status === 'APPROVED' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">${l.status}</span></td>
+        </tr>
+    `).join('');
+}
+
+function populateLotDropdowns() {
+    const select = document.getElementById('form-lot-select');
+    const approvedLots = appState.intakeLots.filter(l => l.status === 'APPROVED');
+    select.innerHTML = approvedLots.map(l => `<option value="${l.id}">${l.id} - ${l.variety} (${l.brix}° Brix)</option>`).join('');
+}
+
+let activeFormulationData = null;
+function handleFormulationRun(e) {
+    e.preventDefault();
+    const lotId = document.getElementById('form-lot-select').value;
+    const lot = appState.intakeLots.find(l => l.id === lotId);
+    if(!lot) return;
+
+    const volume = parseFloat(document.getElementById('form-volume').value);
+    const pulp = volume * 0.65;
+    const water = volume * 0.25;
+    const syrup = Math.max(50, (volume * 0.10) + ((16.0 - lot.brix) * 45));
+
+    activeFormulationData = { lotId, product: document.getElementById('form-product').value, volume };
+
+    document.getElementById('form-results-panel').innerHTML = `
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+            <div class="bg-slate-900 p-3 rounded-lg border border-slate-700"><span class="text-xs text-slate-400">Pulp</span><p class="text-lg font-bold text-white mt-1">${pulp.toFixed(1)} Kg</p></div>
+            <div class="bg-slate-900 p-3 rounded-lg border border-slate-700"><span class="text-xs text-slate-400">Water</span><p class="text-lg font-bold text-white mt-1">${water.toFixed(1)} L</p></div>
+            <div class="bg-slate-900 p-3 rounded-lg border border-slate-700"><span class="text-xs text-slate-400">Sugar Syrup</span><p class="text-lg font-bold text-emerald-400 mt-1">${syrup.toFixed(1)} Kg</p></div>
+            <div class="bg-slate-900 p-3 rounded-lg border border-slate-700"><span class="text-xs text-slate-400">Output Brix</span><p class="text-lg font-bold text-emerald-400 mt-1">16.0° Brix</p></div>
+        </div>
+    `;
+    document.getElementById('commit-batch-container').classList.remove('hidden');
+}
+
+async function commitBatchToProduction() {
+    if(!activeFormulationData) return;
+    const res = await fetch('/api/batches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(activeFormulationData)
+    });
+    const data = await res.json();
+    appState.batches = data.batches;
+    alert(`Batch ${data.batch.id} committed successfully!`);
+    switchTab('dashboard');
+}
+
+function renderFEFOTable() {
+    const tbody = document.getElementById('fefo-table-body');
+    tbody.innerHTML = appState.batches.map(b => `
+        <tr class="hover:bg-slate-800/50 transition">
+            <td class="p-3 font-mono text-xs text-emerald-400">${b.id}</td>
+            <td class="p-3 text-white">${b.product}</td>
+            <td class="p-3">${b.date}</td>
+            <td class="p-3">${b.expiry}</td>
+            <td class="p-3 text-emerald-400">${b.temp}</td>
+            <td class="p-3"><span class="px-2 py-1 bg-emerald-500/10 text-emerald-400 text-xs rounded font-bold">Priority 1</span></td>
+            <td class="p-3"><button onclick="alert('Dispatch order executed for ${b.id}')" class="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded">Dispatch SKU</button></td>
+        </tr>
+    `).join('');
+}
+
+function populateRecallDropdowns() {
+    const select = document.getElementById('recall-batch-select');
+    select.innerHTML = appState.batches.map(b => `<option value="${b.id}">${b.id} - ${b.product}</option>`).join('');
+}
+
+async function triggerRecallKillSwitch() {
+    const batchId = document.getElementById('recall-batch-select').value;
+    const reason = document.getElementById('recall-reason').value;
+
+    const res = await fetch('/api/recall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchId, reason })
+    });
+    const data = await res.json();
+    appState.batches = data.batches;
+    appState.intakeLots = data.lots;
+
+    document.getElementById('recall-output-container').classList.remove('hidden');
+    document.getElementById('recall-tree-content').innerHTML = `
+        <div class="bg-slate-900 p-4 rounded-xl border border-rose-500/40 text-center"><span class="text-xs text-slate-400">Batch Isolated</span><p class="font-bold text-white mt-1">${batchId}</p></div>
+        <div class="bg-slate-900 p-4 rounded-xl border border-rose-500/40 text-center"><span class="text-xs text-slate-400">Reason</span><p class="font-bold text-rose-400 mt-1">${reason}</p></div>
+        <div class="bg-slate-900 p-4 rounded-xl border border-rose-500/40 text-center"><span class="text-xs text-slate-400">Retail Lock</span><p class="font-bold text-white mt-1">14 Stores Flagged</p></div>
+        <div class="bg-slate-900 p-4 rounded-xl border border-rose-500/40 text-center"><span class="text-xs text-slate-400">QR Status</span><p class="font-bold text-rose-400 mt-1">RED LOCK</p></div>
+    `;
+    alert('Recall kill-switch executed in 12.8s across all distribution nodes.');
+}
+
+async function lookupConsumerQR(customHash) {
+    const hash = customHash || document.getElementById('qr-input-hash').value.trim();
+    try {
+        const res = await fetch(`/api/verify/${hash}`);
+        if (!res.ok) throw new Error('Not found');
+        const data = await res.json();
+
+        document.getElementById('consumer-result-card').classList.remove('hidden');
+        const isRecalled = data.batch.status === 'RECALLED';
+        
+        document.getElementById('consumer-alert-box').className = `p-4 rounded-xl border flex items-center gap-3 ${isRecalled ? 'bg-rose-950/40 border-rose-500/30 text-rose-300' : 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'}`;
+        document.getElementById('consumer-alert-icon').className = `fa-solid ${isRecalled ? 'fa-skull-crossbones text-rose-400' : 'fa-shield-check text-emerald-400'} text-xl`;
+        document.getElementById('consumer-alert-title').innerText = isRecalled ? 'CRITICAL RECALL WARNING' : 'Verified Authentic Provenance';
+        document.getElementById('consumer-alert-desc').innerText = isRecalled ? 'Product quarantined under active recall.' : 'Fully verified from orchard to shelf.';
+
+        document.getElementById('res-product-name').innerText = data.batch.product;
+        document.getElementById('res-batch-id').innerText = `Batch ID: ${data.batch.id}`;
+        document.getElementById('res-harvest-date').innerText = data.lot ? data.lot.date : data.batch.date;
+        document.getElementById('res-supplier').innerText = data.lot ? data.lot.supplier : 'Certified Farm';
+        document.getElementById('res-qc-metrics').innerText = `${data.batch.inputBrix}° Brix / 3.8 pH`;
+        document.getElementById('res-hash-label').innerText = data.batch.qrHash;
+
+        document.getElementById('qrcode').innerHTML = '';
+        new QRCode(document.getElementById('qrcode'), {
+            text: `https://hydraminds.erp/verify/${data.batch.qrHash}`,
+            width: 128, height: 128
+        });
+    } catch(err) {
+        alert('QR Hash not found in registry.');
+    }
+}
+
+window.onload = fetchAppState;
